@@ -15,5 +15,5 @@ Sidecar scripts are stored in [`sidecars/`](./sidecars/) so they can be started 
 - [`sidecars/update_readme_daemon.sh`](./sidecars/update_readme_daemon.sh): Daily freshness updater for `README.md` (defaults to `INTERVAL_SECONDS=86400` and `PUSH_CHANGES=1`).
 
 <!-- FRESHNESS_START -->
-_Last updated: `2026-11-07T01:55:16+00:00`_
+_Last updated: `2026-11-07T02:01:49+00:00`_
 <!-- FRESHNESS_END -->
