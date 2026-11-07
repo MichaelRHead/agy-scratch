@@ -12,7 +12,10 @@ PUSH_CHANGES="${PUSH_CHANGES:-1}"
 
 SHARED_STATE_DIR="/home/antigravity/.gemini/sidecars"
 LEASE_FILE="${SHARED_STATE_DIR}/update_readme_daemon.lease.json"
-INSTANCE_ID="${ANTIGRAVITY_CONVERSATION_ID:-vm-$(hostname)}:${BASHPID:-$$}"
+LOG_FILE="${SHARED_STATE_DIR}/update_readme_daemon.log"
+CONVERSATION_ID="${ANTIGRAVITY_CONVERSATION_ID:-vm-$(hostname)}"
+MY_PID="${BASHPID:-$$}"
+INSTANCE_ID="${CONVERSATION_ID}:${MY_PID}"
 
 mkdir -p "${SHARED_STATE_DIR}"
 
@@ -22,13 +25,22 @@ if ! git -C "${REPO_DIR}" config --get remote.origin.fetch >/dev/null 2>&1; then
 fi
 
 acquire_or_renew_lease() {
-  python3 - "${LEASE_FILE}" "${INSTANCE_ID}" "${LEASE_TTL_SECONDS}" <<'PY'
+  python3 - "${LEASE_FILE}" "${CONVERSATION_ID}" "${MY_PID}" "${LEASE_TTL_SECONDS}" <<'PY'
 import json, os, pathlib, sys, tempfile, time
 
 lease_path = pathlib.Path(sys.argv[1])
-instance_id = sys.argv[2]
-ttl = int(sys.argv[3])
+conv_id = sys.argv[2]
+my_pid = int(sys.argv[3])
+ttl = int(sys.argv[4])
+instance_id = f"{conv_id}:{my_pid}"
 now = time.time()
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
 
 current = None
 if lease_path.exists():
@@ -37,11 +49,23 @@ if lease_path.exists():
     except Exception:
         current = None
 
-if current and current.get("holder") != instance_id and current.get("expires_at", 0) > now:
-    sys.exit(1)
+if current:
+    holder = current.get("holder", "")
+    holder_conv = current.get("conversation_id", "")
+    holder_pid = int(current.get("pid", -1))
+    expires_at = float(current.get("expires_at", 0))
+
+    if holder != instance_id and expires_at > now:
+        # If the lease is held by this same VM/conversation, check if its PID died (e.g. VM slept & woke up)
+        if holder_conv == conv_id and holder_pid > 0 and not pid_alive(holder_pid):
+            pass  # Reclaim immediately after VM wake-up
+        else:
+            sys.exit(1)
 
 payload = {
     "holder": instance_id,
+    "conversation_id": conv_id,
+    "pid": my_pid,
     "updated_at": now,
     "expires_at": now + ttl,
 }
@@ -97,6 +121,12 @@ except Exception:
 PY
 }
 
+log_msg() {
+  local msg="[$(date -Iseconds)] [${INSTANCE_ID}] $*"
+  echo "${msg}"
+  echo "${msg}" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
 sync_and_update_if_due() {
   git -C "${REPO_DIR}" fetch origin main >/dev/null 2>&1 || true
   git -C "${REPO_DIR}" rebase --autostash origin/main >/dev/null 2>&1 || true
@@ -128,7 +158,7 @@ else:
 
 readme_path.write_text(content, encoding="utf-8")
 PY
-  echo "[$(date -Iseconds)] [${INSTANCE_ID}] Updated freshness stamp -> ${ts}"
+  log_msg "Updated freshness stamp -> ${ts}"
 
   if [[ "${PUSH_CHANGES}" == "1" ]]; then
     if ! git -C "${REPO_DIR}" diff --quiet -- "${README_FILE}"; then
@@ -138,7 +168,7 @@ PY
         if git -C "${REPO_DIR}" push -u origin HEAD:main; then
           break
         fi
-        echo "[$(date -Iseconds)] Push conflict on attempt ${attempt}; fetching & rebasing..."
+        log_msg "Push conflict on attempt ${attempt}; fetching & rebasing..."
         git -C "${REPO_DIR}" fetch origin main || true
         git -C "${REPO_DIR}" rebase origin/main || true
         sleep 2
@@ -147,18 +177,18 @@ PY
   fi
 }
 
-echo "[$(date -Iseconds)] Starting coordinated README freshness sidecar (instance=${INSTANCE_ID}, interval=${INTERVAL_SECONDS}s)"
+log_msg "Starting coordinated README freshness sidecar (interval=${INTERVAL_SECONDS}s)"
 was_leader=0
 while true; do
   if acquire_or_renew_lease; then
     if (( was_leader == 0 )); then
-      echo "[$(date -Iseconds)] Acquired cross-VM lease (${LEASE_FILE})"
+      log_msg "Acquired cross-VM lease (${LEASE_FILE})"
       was_leader=1
     fi
     sync_and_update_if_due
   else
     if (( was_leader == 1 )); then
-      echo "[$(date -Iseconds)] Lost cross-VM lease; entering standby"
+      log_msg "Lost cross-VM lease; entering standby"
       was_leader=0
     fi
   fi
