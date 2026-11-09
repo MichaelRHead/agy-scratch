@@ -16,5 +16,5 @@ Sidecar scripts are stored in [`sidecars/`](./sidecars/) and coordinate across c
 - [`sidecars/ensure_sidecars.sh`](./sidecars/ensure_sidecars.sh): Checks whether `update_readme_daemon.sh` is running locally or holds an active lease in another VM, returning `NEEDS_START` (exit code `1`) when the agent should relaunch it via `IsDaemon: true`.
 
 <!-- FRESHNESS_START -->
-_Last updated: `2026-11-07T02:01:49+00:00`_
+_Last updated: `2026-11-09T06:02:32+00:00`_
 <!-- FRESHNESS_END -->
